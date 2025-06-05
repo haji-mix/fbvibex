@@ -1,0 +1,27 @@
+{
+    "name": "@types/gauge",
+    "version": "5.0.4",
+    "description": "TypeScript definitions for gauge",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/gauge",
+    "license": "MIT",
+    "contributors": [
+        {
+            "name": "strawhat-dev",
+            "githubUsername": "strawhat-dev",
+            "url": "https://github.com/strawhat-dev"
+        }
+    ],
+    "main": "",
+    "types": "index.d.ts",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+        "directory": "types/gauge"
+    },
+    "scripts": {},
+    "dependencies": {
+        "@types/node": "*"
+    },
+    "typesPublisherContentHash": "f709cfe55467c5746efa34919db6e39a66ba83f4e93145f258c208ff790b765f",
+    "typeScriptVersion": "4.5"
+}

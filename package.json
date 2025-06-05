@@ -1,0 +1,41 @@
+{
+    "name": "fbvibex",
+    "version": "4.3.8",
+    "description": "Unofficial Facebook Chat API",
+    "main": "./index.js",
+    "types": "./index.d.ts",
+    "scripts": {
+                 "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Avery, David, Maude, Benjamin, UIRI, DongDev, Kenneth Panio, Jr Busaco, Aljur Pogoy",
+    "license": "MIT",
+    "keywords": [
+        "facebook",
+        "chat",
+        "api",
+        "fca",
+        "fbvibex"
+    ],
+    "dependencies": {
+        "sshpk": "^1.18.0",
+        "readline": "^1.3.0",
+        "cheerio": "^0.22.0",
+        "node-cron": "^3.0.3",
+        "random-useragent": "^0.5.0",
+        "bluebird": "^3.7.2",
+        "axios": "^1.6.5",
+        "https-proxy-agent": "^4.0.0",
+        "mqtt": "^3.0.0",
+        "npmlog": "^1.2.0",
+        "request": "^2.88.2",
+        "websocket-stream": "^5.5.0"
+    },
+    "devDependencies": {
+        "eslint": "^7.5.0",
+        "mocha": "^7.0.1",
+        "prettier": "^1.11.1"
+    },
+    "engines": {
+        "node": ">=10.x"
+    }
+}
