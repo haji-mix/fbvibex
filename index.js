@@ -2,11 +2,32 @@
 
 /** @module login */
 
+/** 
+ * @typedef {{ 
+ *   selfListen?: boolean, 
+ *   selfListenEvent?: boolean | string, 
+ *   listenEvents?: boolean, 
+ *   listenTyping?: boolean, 
+ *   updatePresence?: boolean, 
+ *   forceLogin?: boolean, 
+ *   autoMarkDelivery?: boolean, 
+ *   autoMarkRead?: boolean, 
+ *   autoReconnect?: boolean, 
+ *   online?: boolean, 
+ *   emitReady?: boolean, 
+ *   randomUserAgent?: boolean, 
+ *   userAgent?: string, 
+ *   proxy?: string, 
+ *   bypassRegion?: string, 
+ *   pageID?: string, 
+ *   OnAutoLoginProcess?: boolean,
+ *   refresh_dtsg?: boolean 
+ * }} LoginOptions 
+ */
 /** @typedef {{ key: string, value: string, domain?: string, path?: string, expires?: number }} Cookie */
 /** @typedef {{ code: string, name: string, location: string }} Region */
 /** @typedef {{ av: string, fb_api_caller_class: string, fb_api_req_friendly_name: string, variables: string, server_timestamps: boolean, doc_id: string, fb_dtsg: string, jazoest: string, lsd: string }} FormBypass */
 /** @typedef {{ userID: string, jar: any, clientID: string, globalOptions: LoginOptions, loggedIn: boolean, access_token: string, clientMutationId: number, mqttClient: any, lastSeqId: number | undefined, syncToken: string | undefined, mqttEndpoint: string, region: string, firstListen: boolean, req_ID: number, callback_Task: Record<string, any>, fb_dtsg: string }} APIContext */
-/** @typedef {{ selfListen?: boolean, selfListenEvent?: boolean | string, listenEvents?: boolean, listenTyping?: boolean, updatePresence?: boolean, forceLogin?: boolean, autoMarkDelivery?: boolean, autoMarkRead?: boolean, autoReconnect?: boolean, online?: boolean, emitReady?: boolean, randomUserAgent?: boolean, userAgent?: string, proxy?: string, bypassRegion?: string, pageID?: string, OnAutoLoginProcess?: boolean }} LoginOptions */
 /** @typedef {{ setOptions: (options: LoginOptions) => Promise<void>, getAppState: () => Cookie[], getCookie: () => string, [key: string]: any }} API */
 /** @typedef {(error: Error | null, api: API | null) => void} LoginCallback */
 /** @typedef {{ appState?: Cookie[] | string | { cookies: Cookie[] }, email?: string, password?: string }} LoginCredentials */
@@ -191,11 +212,14 @@ async function setOptions(options = {}) {
           state.globalOptions.bypassRegion = region.code;
           log.info("setOptions", `Bypass region set to: ${region.code} (${region.name})`);
         } else {
-          delete state.globalOptions.bypassRegion;
           const fallbackRegion = getRandomRegion();
           state.globalOptions.bypassRegion = fallbackRegion.code;
-          log.info("setOptions", `Falling back to region: ${fallbackRegion.code} (${fallbackRegion.name})`);
+          log.info("setOptions", `Invalid or no bypassRegion provided; using random region: ${fallbackRegion.code} (${fallbackRegion.name})`);
         }
+        break;
+      case "refresh_dtsg":
+        state.globalOptions.refresh_dtsg = Boolean(value);
+        log.info("setOptions", `DTSG refresh set to: ${state.globalOptions.refresh_dtsg}`);
         break;
     }
   }
@@ -395,7 +419,7 @@ async function checkIfLocked(resp, appstate, jar, ID) {
 /**
  * Builds the API object with context and default functions.
  * @param {string} html - HTML response from Facebook.
- * * @param {any} jar - Cookie jar object.
+ * @param {any} jar - Cookie jar object.
  * @returns {{ ctx: APIContext, api: API }} API context and functions.
  */
 function buildAPI(html, jar) {
@@ -430,19 +454,15 @@ function buildAPI(html, jar) {
 
   let mqttEndpoint, region, irisSeqID;
 
-  if (state.globalOptions.bypassRegion) {
-    const regionObj = validateRegion(state.globalOptions.bypassRegion);
-    if (regionObj) {
-      region = regionObj.code;
-      log.info("buildAPI", `Using bypassRegion: ${region} (${regionObj.name})`);
-    } else {
-      const fallbackRegion = getRandomRegion();
-      region = fallbackRegion.code;
-      log.info("buildAPI", `Invalid bypassRegion; falling back to: ${region} (${fallbackRegion.name})`);
-    }
+  // Region selection logic: Use bypassRegion if provided and valid, otherwise randomize
+  const regionObj = state.globalOptions.bypassRegion ? validateRegion(state.globalOptions.bypassRegion) : null;
+  if (regionObj) {
+    region = regionObj.code;
+    log.info("buildAPI", `Using provided bypassRegion: ${region} (${regionObj.name})`);
   } else {
     const fallbackRegion = getRandomRegion();
     region = fallbackRegion.code;
+    log.info("buildAPI", `No valid bypassRegion provided; using random region: ${region} (${fallbackRegion.name})`);
   }
 
   mqttEndpoint = `wss://edge-chat.facebook.com/chat?region=${region}&sid=${userID}`;
@@ -536,30 +556,36 @@ function buildAPI(html, jar) {
       api[functionName] = require(`./src/${file}`)(defaultFuncs, api, ctx);
     });
 
-    /**
-     * Refreshes the Facebook DTSG token.
-     */
-    function refreshAction() {
-      try {
-        const filePath = path.join(__dirname, "fb_dtsg_data.json");
-        const fbDtsgData = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  /**
+   * Refreshes the Facebook DTSG token if refresh_dtsg is enabled.
+   */
+  function refreshAction() {
+    try {
+      const filePath = path.join(__dirname, "fb_dtsg_data.json");
+      const fbDtsgData = JSON.parse(fs.readFileSync(filePath, "utf8"));
 
-        if (fbDtsgData?.[userID]) {
-          api
-            .refreshFb_dtsg(fbDtsgData[userID])
-            .then(() => log.info("refreshAction", `Fb_dtsg refreshed successfully for user ${userID}`))
-            .catch((err) => log.error("refreshAction", `Error during Fb_dtsg refresh for user ${userID}: ${err.message}`));
-        } else {
-          log.error("refreshAction", `No fb_dtsg data found for user ${userID}`);
-        }
-      } catch (err) {
-        log.error("refreshAction", `Error reading fb_dtsg_data.json: ${err.message}`);
+      if (fbDtsgData?.[userID]) {
+        api
+          .refreshFb_dtsg(fbDtsgData[userID])
+          .then(() => log.info("refreshAction", `Fb_dtsg refreshed successfully for user ${userID}`))
+          .catch((err) => log.error("refreshAction", `Error during Fb_dtsg refresh for user ${userID}: ${err.message}`));
+      } else {
+        log.error("refreshAction", `No fb_dtsg data found for user ${userID}`);
       }
+    } catch (err) {
+      log.error("refreshAction", `Error reading fb_dtsg_data.json: ${err.message}`);
     }
+  }
 
+  // Schedule DTSG refresh only if refresh_dtsg is true
+  if (state.globalOptions.refresh_dtsg !== false) {
     cron.schedule("0 0 * * *", refreshAction, { timezone: "Asia/Manila" });
+    log.info("buildAPI", "DTSG refresh scheduled (daily at midnight Asia/Manila)");
+  } else {
+    log.info("buildAPI", "DTSG refresh disabled");
+  }
 
-    return { ctx, api };
+  return { ctx, api };
 }
 
 /**
@@ -807,7 +833,6 @@ async function loginHelper(credentials, callback) {
       .then((res) => {
         if (state.globalOptions.OnAutoLoginProcess) return res;
         if (!/MPageLoadClientMetrics/.test(res.body)) {
-          log.info("loginHelper", "No MPageLoadClientMetrics found; retrying with www.facebook.com");
           return utils.get("https://www.facebook.com/", jar, null, state.globalOptions, { noRef: true });
         }
         return res;
@@ -894,6 +919,7 @@ async function login(loginData, options = {}, callback) {
     online: true,
     emitReady: false,
     randomUserAgent: false,
+    refresh_dtsg: true, // Default to true for backward compatibility
   };
 
   Object.assign(state.globalOptions, defaultOptions);
