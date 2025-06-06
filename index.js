@@ -2,32 +2,11 @@
 
 /** @module login */
 
-/** 
- * @typedef {{ 
- *   selfListen?: boolean, 
- *   selfListenEvent?: boolean | string, 
- *   listenEvents?: boolean, 
- *   listenTyping?: boolean, 
- *   updatePresence?: boolean, 
- *   forceLogin?: boolean, 
- *   autoMarkDelivery?: boolean, 
- *   autoMarkRead?: boolean, 
- *   autoReconnect?: boolean, 
- *   online?: boolean, 
- *   emitReady?: boolean, 
- *   randomUserAgent?: boolean, 
- *   userAgent?: string, 
- *   proxy?: string, 
- *   bypassRegion?: string, 
- *   pageID?: string, 
- *   OnAutoLoginProcess?: boolean,
- *   refresh_dtsg?: boolean 
- * }} LoginOptions 
- */
 /** @typedef {{ key: string, value: string, domain?: string, path?: string, expires?: number }} Cookie */
 /** @typedef {{ code: string, name: string, location: string }} Region */
 /** @typedef {{ av: string, fb_api_caller_class: string, fb_api_req_friendly_name: string, variables: string, server_timestamps: boolean, doc_id: string, fb_dtsg: string, jazoest: string, lsd: string }} FormBypass */
 /** @typedef {{ userID: string, jar: any, clientID: string, globalOptions: LoginOptions, loggedIn: boolean, access_token: string, clientMutationId: number, mqttClient: any, lastSeqId: number | undefined, syncToken: string | undefined, mqttEndpoint: string, region: string, firstListen: boolean, req_ID: number, callback_Task: Record<string, any>, fb_dtsg: string }} APIContext */
+/** @typedef {{ selfListen?: boolean, selfListenEvent?: boolean | string, listenEvents?: boolean, listenTyping?: boolean, updatePresence?: boolean, forceLogin?: boolean, autoMarkDelivery?: boolean, autoMarkRead?: boolean, autoReconnect?: boolean, online?: boolean, emitReady?: boolean, randomUserAgent?: boolean, userAgent?: string, proxy?: string, bypassRegion?: string, pageID?: string, OnAutoLoginProcess?: boolean, refresh_dtsg?: boolean }} LoginOptions */
 /** @typedef {{ setOptions: (options: LoginOptions) => Promise<void>, getAppState: () => Cookie[], getCookie: () => string, [key: string]: any }} API */
 /** @typedef {(error: Error | null, api: API | null) => void} LoginCallback */
 /** @typedef {{ appState?: Cookie[] | string | { cookies: Cookie[] }, email?: string, password?: string }} LoginCredentials */
@@ -57,9 +36,24 @@ const config = {
   ],
 };
 
+// Initialize state with default globalOptions
 const state = {
   checkVerified: null,
-  globalOptions: {},
+  globalOptions: {
+    selfListen: false,
+    selfListenEvent: false,
+    listenEvents: true,
+    listenTyping: false,
+    updatePresence: false,
+    forceLogin: false,
+    autoMarkDelivery: false,
+    autoMarkRead: true,
+    autoReconnect: true,
+    online: true,
+    emitReady: false,
+    randomUserAgent: false,
+    refresh_dtsg: true,
+  },
   behaviorDetected: false,
 };
 
@@ -68,16 +62,19 @@ log.maxRecordSize = config.logRecordSize;
 /**
  * Validates a region code against supported regions.
  * @param {string} regionCode - The region code to validate.
- * @returns {Region | null} The region object if valid, null otherwise.
+ * @returns {Region} The region object if valid.
+ * @throws {Error} If the region code is invalid or empty.
  */
 function validateRegion(regionCode) {
-  if (!regionCode || typeof regionCode !== "string") return null;
+  if (!regionCode || typeof regionCode !== "string" || regionCode.trim() === "") {
+    const supportedRegions = config.defaultRegions.map((r) => r.code).join(", ");
+    throw new Error(`Region code must be a non-empty string. Supported regions: ${supportedRegions}`);
+  }
   const code = regionCode.trim().toUpperCase();
-  const region = config.defaultRegions.find((r) => r.code === code);
+  const region = config.defaultRegions.find((r) => r.code.toUpperCase() === code);
   if (!region) {
     const supportedRegions = config.defaultRegions.map((r) => r.code).join(", ");
-    log.warn("validateRegion", `Invalid region code: ${code}. Supported regions: ${supportedRegions}`);
-    return null;
+    throw new Error(`Invalid region code: ${regionCode}. Supported regions: ${supportedRegions}`);
   }
   return region;
 }
@@ -150,6 +147,9 @@ function normalizeAppState(appState) {
 async function setOptions(options = {}) {
   for (const [key, value] of Object.entries(options)) {
     switch (key) {
+      case "refresh_dtsg":
+        state.globalOptions.refresh_dtsg = Boolean(value);
+        break;
       case "online":
         state.globalOptions.online = Boolean(value);
         break;
@@ -207,19 +207,18 @@ async function setOptions(options = {}) {
         }
         break;
       case "bypassRegion":
-        const region = validateRegion(value);
-        if (region) {
-          state.globalOptions.bypassRegion = region.code;
-          log.info("setOptions", `Bypass region set to: ${region.code} (${region.name})`);
+        if (value) {
+          try {
+            const region = validateRegion(value);
+            state.globalOptions.bypassRegion = region.code;
+            log.info("setOptions", `bypassRegion set to: ${region.code} (${region.name})`);
+          } catch (error) {
+            log.error("setOptions", `Invalid bypassRegion: ${error.message}`);
+            delete state.globalOptions.bypassRegion;
+          }
         } else {
-          const fallbackRegion = getRandomRegion();
-          state.globalOptions.bypassRegion = fallbackRegion.code;
-          log.info("setOptions", `Invalid or no bypassRegion provided; using random region: ${fallbackRegion.code} (${fallbackRegion.name})`);
+          delete state.globalOptions.bypassRegion;
         }
-        break;
-      case "refresh_dtsg":
-        state.globalOptions.refresh_dtsg = Boolean(value);
-        log.info("setOptions", `DTSG refresh set to: ${state.globalOptions.refresh_dtsg}`);
         break;
     }
   }
@@ -452,21 +451,7 @@ function buildAPI(html, jar) {
 
   const clientID = (Math.random() * 2147483648 | 0).toString(16);
 
-  let mqttEndpoint, region, irisSeqID;
-
-  // Region selection logic: Use bypassRegion if provided and valid, otherwise randomize
-  const regionObj = state.globalOptions.bypassRegion ? validateRegion(state.globalOptions.bypassRegion) : null;
-  if (regionObj) {
-    region = regionObj.code;
-    log.info("buildAPI", `Using provided bypassRegion: ${region} (${regionObj.name})`);
-  } else {
-    const fallbackRegion = getRandomRegion();
-    region = fallbackRegion.code;
-    log.info("buildAPI", `No valid bypassRegion provided; using random region: ${region} (${fallbackRegion.name})`);
-  }
-
-  mqttEndpoint = `wss://edge-chat.facebook.com/chat?region=${region}&sid=${userID}`;
-  log.info("buildAPI", `Server region set to ${region}`);
+  let mqttEndpoint, region;
 
   const ctx = {
     userID,
@@ -477,7 +462,7 @@ function buildAPI(html, jar) {
     access_token: "NONE",
     clientMutationId: 0,
     mqttClient: undefined,
-    lastSeqId: irisSeqID,
+    lastSeqId: undefined,
     syncToken: undefined,
     mqttEndpoint,
     region,
@@ -492,7 +477,23 @@ function buildAPI(html, jar) {
      * Sets configuration options.
      * @param {LoginOptions} options - Options to set.
      */
-    setOptions: setOptions,
+    setOptions: async (options) => {
+      await setOptions(options);
+      if (options.bypassRegion && options.bypassRegion !== ctx.region) {
+        try {
+          const regionObj = validateRegion(options.bypassRegion);
+          ctx.region = regionObj.code;
+        } catch (error) {
+          const fallbackRegion = getRandomRegion();
+          ctx.region = fallbackRegion.code;
+        }
+      } else {
+          const fallbackRegion = getRandomRegion();
+          ctx.region = fallbackRegion.code;
+      }
+      ctx.mqttEndpoint = `wss://edge-chat.facebook.com/chat?region=${ctx.region}&sid=${userID}`;
+      log.info("buildAPI", `MQTT endpoint set to: ${ctx.mqttEndpoint}`);
+    },
 
     /**
      * Retrieves the application state.
@@ -546,6 +547,8 @@ function buildAPI(html, jar) {
         .join("; ");
     },
   };
+  
+  api.ctx = ctx;
 
   const defaultFuncs = utils.makeDefaults(html, userID, ctx);
 
@@ -556,36 +559,34 @@ function buildAPI(html, jar) {
       api[functionName] = require(`./src/${file}`)(defaultFuncs, api, ctx);
     });
 
-  /**
-   * Refreshes the Facebook DTSG token if refresh_dtsg is enabled.
-   */
-  function refreshAction() {
-    try {
-      const filePath = path.join(__dirname, "fb_dtsg_data.json");
-      const fbDtsgData = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    /**
+     * Refreshes the Facebook DTSG token.
+     */
+    function refreshAction() {
+      try {
+        const filePath = path.join(__dirname, "fb_dtsg_data.json");
+        const fbDtsgData = JSON.parse(fs.readFileSync(filePath, "utf8"));
 
-      if (fbDtsgData?.[userID]) {
-        api
-          .refreshFb_dtsg(fbDtsgData[userID])
-          .then(() => log.info("refreshAction", `Fb_dtsg refreshed successfully for user ${userID}`))
-          .catch((err) => log.error("refreshAction", `Error during Fb_dtsg refresh for user ${userID}: ${err.message}`));
-      } else {
-        log.error("refreshAction", `No fb_dtsg data found for user ${userID}`);
+        if (fbDtsgData?.[userID]) {
+          api
+            .refreshFb_dtsg(fbDtsgData[userID])
+            .then(() => log.info("refreshAction", `Fb_dtsg refreshed successfully for user ${userID}`))
+            .catch((err) => log.error("refreshAction", `Error during Fb_dtsg refresh for user ${userID}: ${err.message}`));
+        } else {
+          log.error("refreshAction", `No fb_dtsg data found for user ${userID}`);
+        }
+      } catch (err) {
+        log.error("refreshAction", `Error reading fb_dtsg_data.json: ${err.message}`);
       }
-    } catch (err) {
-      log.error("refreshAction", `Error reading fb_dtsg_data.json: ${err.message}`);
     }
-  }
 
-  // Schedule DTSG refresh only if refresh_dtsg is true
-  if (state.globalOptions.refresh_dtsg !== false) {
-    cron.schedule("0 0 * * *", refreshAction, { timezone: "Asia/Manila" });
-    log.info("buildAPI", "DTSG refresh scheduled (daily at midnight Asia/Manila)");
-  } else {
-    log.info("buildAPI", "DTSG refresh disabled");
-  }
+    if (ctx.globalOptions.refresh_dtsg) {
+      cron.schedule("0 0 * * *", refreshAction, { timezone: "Asia/Manila" });
+    } else {
+      log.info("buildAPI", "DTSG refresh disabled by configuration.");
+    }
 
-  return { ctx, api };
+    return { ctx, api };
 }
 
 /**
@@ -833,6 +834,7 @@ async function loginHelper(credentials, callback) {
       .then((res) => {
         if (state.globalOptions.OnAutoLoginProcess) return res;
         if (!/MPageLoadClientMetrics/.test(res.body)) {
+          log.info("loginHelper", "No MPageLoadClientMetrics found; retrying with www.facebook.com");
           return utils.get("https://www.facebook.com/", jar, null, state.globalOptions, { noRef: true });
         }
         return res;
@@ -883,7 +885,7 @@ async function loginHelper(credentials, callback) {
         if (detectLocked) throw detectLocked;
         const detectSuspension = await checkIfSuspended(res, credentials.appState || [], jar);
         if (detectSuspension) throw detectSuspension;
-        log.info("loginHelper", "Done logging in.");
+        log.info("loginHelper", `Login successful.`);
         callback(null, api);
       })
       .catch((error) => callback(error));
@@ -906,7 +908,7 @@ async function login(loginData, options = {}, callback) {
     options = {};
   }
 
-  const defaultOptions = {
+  state.globalOptions = {
     selfListen: false,
     selfListenEvent: false,
     listenEvents: true,
@@ -919,10 +921,9 @@ async function login(loginData, options = {}, callback) {
     online: true,
     emitReady: false,
     randomUserAgent: false,
-    refresh_dtsg: true, // Default to true for backward compatibility
+    refresh_dtsg: true,
   };
 
-  Object.assign(state.globalOptions, defaultOptions);
   await setOptions(options);
 
   let credentials;
