@@ -12,15 +12,15 @@
 /** @typedef {{ appState?: Cookie[] | string | { cookies: Cookie[] }, email?: string, password?: string }} LoginCredentials */
 
 const utils = require("./utils");
-const log = require("npmlog");
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
 const cheerio = require("cheerio");
 const readline = require("readline/promises");
+const { logger } = require("./logger");
+
 
 const config = {
-  logRecordSize: 100,
   defaultRegions: [
     { code: "PRN", name: "Pacific Northwest Region", location: "Pacific Northwest" },
     { code: "VLL", name: "Valley Region", location: "Valley" },
@@ -56,8 +56,6 @@ const state = {
   },
   behaviorDetected: false,
 };
-
-log.maxRecordSize = config.logRecordSize;
 
 /**
  * Validates a region code against supported regions.
@@ -202,8 +200,8 @@ async function setOptions(options = {}) {
         state.globalOptions.randomUserAgent = Boolean(value);
         if (value) {
           state.globalOptions.userAgent = utils.generateUserAgent();
-          log.warn("setOptions", "Random user agent enabled. Use at your own risk.");
-          log.warn("randomUserAgent", `UA selected: ${state.globalOptions.userAgent}`);
+          logger.warn("CONFIG", "Random user agent enabled. Use at your own risk.");
+          logger.warn("randomUserAgent", `UA selected: ${state.globalOptions.userAgent}`);
         }
         break;
       case "bypassRegion":
@@ -211,9 +209,9 @@ async function setOptions(options = {}) {
           try {
             const region = validateRegion(value);
             state.globalOptions.bypassRegion = region.code;
-            log.info("setOptions", `bypassRegion set to: ${region.code} (${region.name})`);
+            logger.info("CONFIG", `bypassRegion set to: ${region.code} (${region.name})`);
           } catch (error) {
-            log.error("setOptions", `Invalid bypassRegion: ${error.message}`);
+            logger.error("CONFIG", `Invalid bypassRegion: ${error.message}`);
             delete state.globalOptions.bypassRegion;
           }
         } else {
@@ -260,12 +258,12 @@ function updateDTSG(res, appstate, jar, ID) {
 
       existingData[UID] = { fb_dtsg, jazoest };
       fs.writeFileSync(filePath, JSON.stringify(existingData, null, 2), "utf8");
-      log.info("updateDTSG", "fb_dtsg_data.json updated successfully.");
+      logger.info("updateDTSG", "fb_dtsg_data.json updated successfully.");
     }
 
     return res;
   } catch (error) {
-    log.error("updateDTSG", `Error updating DTSG for user ${UID || "unknown"}: ${error.message}`);
+    logger.error("updateDTSG", `Error updating DTSG for user ${UID || "unknown"}: ${error.message}`);
     return null;
   }
 }
@@ -311,7 +309,7 @@ async function bypassAutoBehavior(resp, jar, appstate, ID) {
           lsd,
         };
 
-        log.warn("bypassAutoBehavior", `Automated behavior detected for user ${UID}.`);
+        logger.warn("bypassAutoBehavior", `Automated behavior detected for user ${UID}.`);
         state.behaviorDetected = true;
         return utils
           .post("https://www.facebook.com/api/graphql/", jar, formBypass, state.globalOptions)
@@ -320,7 +318,7 @@ async function bypassAutoBehavior(resp, jar, appstate, ID) {
     }
     return resp;
   } catch (error) {
-    log.error("bypassAutoBehavior", error.message);
+    logger.error("bypassAutoBehavior", error.message);
   }
 }
 
@@ -353,7 +351,7 @@ async function checkIfSuspended(resp, appstate, jar, ID) {
         const daystoDisable = resp.body?.match(/"log_out_uri":"(.*?)","title":"(.*?)"/);
         if (daystoDisable?.[2]) {
           suspendReasons.durationInfo = daystoDisable[2];
-          log.error("checkIfSuspended", `Suspension time remaining: ${suspendReasons.durationInfo}`);
+          logger.error("checkIfSuspended", `Suspension time remaining: ${suspendReasons.durationInfo}`);
         }
 
         const reasonDescription = resp.body?.match(/"reason_section_body":"(.*?)"/);
@@ -363,16 +361,16 @@ async function checkIfSuspended(resp, appstate, jar, ID) {
             ?.toLowerCase()
             ?.replace("your account, or activity on it, doesn't follow our community standards on ", "");
           suspendReasons.shortReason = reasonReplace?.charAt(0).toUpperCase() + reasonReplace?.slice(1);
-          log.error(`Alert on ${UID}:`, "Account has been suspended!");
-          log.error(`Why suspended:`, suspendReasons.longReason);
-          log.error(`Reason on suspension:`, suspendReasons.shortReason);
+          logger.error(`Alert on ${UID}:`, "Account has been suspended!");
+          logger.error(`Why suspended:`, suspendReasons.longReason);
+          logger.error(`Reason on suspension:`, suspendReasons.shortReason);
         }
 
         return { suspended: true, suspendReasons };
       }
     }
   } catch (error) {
-    log.error("checkIfSuspended", error.message);
+    logger.error("checkIfSuspended", error.message);
   }
 }
 
@@ -405,13 +403,13 @@ async function checkIfLocked(resp, appstate, jar, ID) {
         const lockDesc = resp.body.match(/"is_unvetted_flow":true,"title":"(.*?)"/);
         if (lockDesc?.[1]) {
           lockedReasons.reason = lockDesc[1];
-          log.error(`Alert on ${UID}:`, lockedReasons.reason);
+          logger.error(`Alert on ${UID}:`, lockedReasons.reason);
         }
         return { locked: true, lockedReasons };
       }
     }
   } catch (error) {
-    log.error("checkIfLocked", error.message);
+    logger.error("checkIfLocked", error.message);
   }
 }
 
@@ -434,16 +432,16 @@ function buildAPI(html, jar) {
   }
 
   if (html.includes("/checkpoint/block/?next")) {
-    log.warn("buildAPI", "Checkpoint detected. Please log in with a browser to verify.");
+    logger.warn("FCA LOGIN", "Checkpoint detected. Please log in with a browser to verify.");
     throw new Error("Checkpoint detected.");
   }
 
   userID = secondary_profile?.value?.toString() || primary_profile?.value?.toString();
   if (secondary_profile) {
-    log.warn("buildAPI", "Using secondary profile (i_user) instead of primary (c_user).");
+    logger.warn("FCA LOGIN", "Using secondary profile (i_user) instead of primary (c_user).");
   }
 
-  log.info("buildAPI", `Logged in as ${userID}`);
+  logger.info("FCA LOGIN", `Logged in as ${userID}`);
 
   try {
     clearInterval(state.checkVerified);
@@ -492,7 +490,7 @@ function buildAPI(html, jar) {
           ctx.region = fallbackRegion.code;
       }
       ctx.mqttEndpoint = `wss://edge-chat.facebook.com/chat?region=${ctx.region}&sid=${userID}`;
-      log.info("buildAPI", `MQTT endpoint set to: ${ctx.mqttEndpoint}`);
+      logger.info("FCA LOGIN", `MQTT endpoint set to: ${ctx.mqttEndpoint}`);
     },
 
     /**
@@ -570,20 +568,20 @@ function buildAPI(html, jar) {
         if (fbDtsgData?.[userID]) {
           api
             .refreshFb_dtsg(fbDtsgData[userID])
-            .then(() => log.info("refreshAction", `Fb_dtsg refreshed successfully for user ${userID}`))
-            .catch((err) => log.error("refreshAction", `Error during Fb_dtsg refresh for user ${userID}: ${err.message}`));
+            .then(() => logger.info("refreshAction", `Fb_dtsg refreshed successfully for user ${userID}`))
+            .catch((err) => logger.error("refreshAction", `Error during Fb_dtsg refresh for user ${userID}: ${err.message}`));
         } else {
-          log.error("refreshAction", `No fb_dtsg data found for user ${userID}`);
+          logger.error("refreshAction", `No fb_dtsg data found for user ${userID}`);
         }
       } catch (err) {
-        log.error("refreshAction", `Error reading fb_dtsg_data.json: ${err.message}`);
+        logger.error("refreshAction", `Error reading fb_dtsg_data.json: ${err.message}`);
       }
     }
 
     if (ctx.globalOptions.refresh_dtsg) {
       cron.schedule("0 0 * * *", refreshAction, { timezone: "Asia/Manila" });
     } else {
-      log.info("buildAPI", "DTSG refresh disabled by configuration.");
+      logger.info("FCA LOGIN", "DTSG refresh disabled by configuration.");
     }
 
     return { ctx, api };
@@ -688,7 +686,7 @@ async function promptFor2FACode() {
     const code = await rl.question("Enter 2FA code: ");
     return code;
   } catch (error) {
-    log.error("promptFor2FACode", `Error reading 2FA code: ${error.message}`);
+    logger.error("promptFor2FACode", `Error reading 2FA code: ${error.message}`);
     throw error;
   } finally {
     rl.close();
@@ -802,7 +800,7 @@ async function loginHelper(credentials, callback) {
         const redirectLink = `https://m.facebook.com/a/preferences.php?basic_site_devices=m_basic&uri=${encodeURIComponent(
           "https://m.facebook.com/home.php"
         )}&gfid=${fid}`;
-        log.info("checkAndFixErr", `Attempting to bypass region error with redirect: ${redirectLink}`);
+        logger.info("checkAndFixErr", `Attempting to bypass region error with redirect: ${redirectLink}`);
         return utils
           .get(redirectLink, jar, null, state.globalOptions)
           .then(utils.saveCookies(jar));
@@ -821,7 +819,7 @@ async function loginHelper(credentials, callback) {
       const reg = /<meta http-equiv="refresh" content="0;url=([^"]+)[^>]+>/;
       const redirectMatch = reg.exec(res.body);
       if (redirectMatch?.[1]) {
-        log.info("redirect", `Following redirect to: ${redirectMatch[1]}`);
+        logger.info("redirect", `Following redirect to: ${redirectMatch[1]}`);
         return utils.get(redirectMatch[1], jar, null, state.globalOptions);
       }
       return res;
@@ -834,7 +832,6 @@ async function loginHelper(credentials, callback) {
       .then((res) => {
         if (state.globalOptions.OnAutoLoginProcess) return res;
         if (!/MPageLoadClientMetrics/.test(res.body)) {
-          log.info("loginHelper", "No MPageLoadClientMetrics found; retrying with www.facebook.com");
           return utils.get("https://www.facebook.com/", jar, null, state.globalOptions, { noRef: true });
         }
         return res;
@@ -885,12 +882,12 @@ async function loginHelper(credentials, callback) {
         if (detectLocked) throw detectLocked;
         const detectSuspension = await checkIfSuspended(res, credentials.appState || [], jar);
         if (detectSuspension) throw detectSuspension;
-        log.info("loginHelper", `Login successful.`);
+        logger.info("FCA LOGIN", `Login successful.`);
         callback(null, api);
       })
       .catch((error) => callback(error));
   } catch (error) {
-    log.error("loginHelper", error.message);
+    logger.error("FCA LOGIN", error.message);
     callback(error);
   }
 }
@@ -943,11 +940,11 @@ async function login(loginData, options = {}, callback) {
         await loginHelper(credentials, (error, api) => {
           if (error) {
             if (state.behaviorDetected) {
-              log.warn("login", "Failed after behavior detection, retrying...");
+              logger.warn("login", "Failed after behavior detection, retrying...");
               state.behaviorDetected = false;
               loginBox();
             } else {
-              log.error("login", error);
+              logger.error("login", error);
               callback(error);
             }
             return;
